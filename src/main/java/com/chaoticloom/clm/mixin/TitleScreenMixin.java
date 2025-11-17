@@ -47,16 +47,16 @@ public abstract class TitleScreenMixin extends Screen {
     private void joinServer(String ip, int port) {
         ServerAddress serverAddress = ServerAddress.parseString(ip + ":" + port);
         ServerData serverData = new ServerData("My Server", serverAddress.getHost(), false);
-        ConnectScreen.connect(this, this.minecraft, serverData);
+        ConnectScreen.startConnecting(this, this.minecraft, serverAddress, serverData, true);
     }
 
     @Inject(method = "createNormalMenuOptions", at = @At("HEAD"), cancellable = true)
     private void createNormalMenuOptions(int startingYPos, int verticalSpacingBetweenButtons, CallbackInfo ci) {
-        Button singlePlayerButton = createButton(
-                Component.translatable("menu.singleplayer"),
-                0,
+        Button serverButton = createButton(
+                Component.translatable("clm.title-screen.join-event"),
+                1,
                 startingYPos, verticalSpacingBetweenButtons,
-                button -> this.minecraft.setScreen(new SelectWorldScreen(this))
+                button -> joinServer("127.0.0.1", 25565)
         );
 
         ci.cancel();
