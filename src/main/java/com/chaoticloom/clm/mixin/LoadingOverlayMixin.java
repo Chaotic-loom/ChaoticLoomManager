@@ -1,15 +1,20 @@
 package com.chaoticloom.clm.mixin;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.resources.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.Slice;
 
 @Mixin(LoadingOverlay.class)
 public class LoadingOverlayMixin {
+    @Unique
+    private static final ResourceLocation DIAMOND_PICKAXE = new ResourceLocation("clm", "textures/gui/chaoticloom.png");
+
     @Redirect(
             method = "render",
             at = @At(
@@ -31,10 +36,34 @@ public class LoadingOverlayMixin {
             int x, int y, int w, int h,
             float u, float v, int tw, int th, int texW, int texH
     ) {
-        int newW = (int)(w * 4f);
-        int newH = (int)(h * 0.9f);
+        // Diamond pickaxe texture is 16×16
+        int baseW = 1252;
+        int baseH = 1252;
 
-        guiGraphics.blit(tex, x, y, newW, newH, u, v, tw, th, texW, texH);
+        // Scale down
+        int scaledW = baseW / 10;
+        int scaledH = baseH / 10;
+
+        // Properly center on screen
+        int screenCenterX = guiGraphics.guiWidth() / 2;
+        int screenCenterY = guiGraphics.guiHeight() / 2;
+
+        int centeredX = screenCenterX - (scaledW / 2);
+        int centeredY = screenCenterY - (scaledH / 2);
+
+        // Fix blending
+        RenderSystem.defaultBlendFunc();
+        //guiGraphics.setColor(1f, 1f, 1f, 1f);
+
+        // Draw the texture
+        guiGraphics.blit(
+                DIAMOND_PICKAXE,
+                centeredX, centeredY,
+                scaledW, scaledH,
+                0, 0,    // UV origin
+                baseW, baseH, // region width/height
+                baseW, baseH  // texture size
+        );
     }
 
     @Redirect(
