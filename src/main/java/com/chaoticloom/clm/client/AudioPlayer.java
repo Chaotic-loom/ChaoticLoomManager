@@ -2,6 +2,277 @@ package com.chaoticloom.clm.client;
 
 import org.lwjgl.openal.AL;
 import org.lwjgl.openal.ALC;
+import org.lwjgl.openal.ALC10;
+import org.lwjgl.openal.ALCCapabilities;
+
+import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.lwjgl.openal.AL10.*;
+import static org.lwjgl.system.MemoryUtil.NULL;
+
+public class AudioPlayer {
+
+    private final int alFormat;
+    private final int sampleRate;
+
+    private final AtomicBoolean isPlaying = new AtomicBoolean(false);
+    private final AtomicBoolean isClosed = new AtomicBoolean(false);
+    private final AtomicBoolean flushRequest = new AtomicBoolean(false);
+
+    private final Thread audioThread;
+    private final BlockingQueue<ByteBuffer> audioQueue = new LinkedBlockingQueue<>(16); // Max 16 audio chunks
+
+    // --- These fields are ONLY touched by the audioThread ---
+    private long device;
+    private long context;
+    private int sourceId;
+    private int[] allBuffers;
+    private final Queue<Integer> freeBuffers = new LinkedList<>();
+    private static final int NUM_BUFFERS = 8;
+    // ---
+
+    public AudioPlayer(int sampleRate, int channels) {
+        this.sampleRate = sampleRate;
+
+        if (channels == 1) {
+            this.alFormat = AL_FORMAT_MONO16;
+        } else if (channels == 2) {
+            this.alFormat = AL_FORMAT_STEREO16;
+        } else {
+            throw new IllegalArgumentException("Unsupported audio channel count: " + channels);
+        }
+
+        // Create the thread but don't start it.
+        // We start it in play() to ensure context is ready only when needed.
+        this.audioThread = new Thread(this::audioLoop, "Video-Audio-Thread");
+        this.audioThread.setDaemon(true);
+        System.out.println("AudioPlayer ready.");
+    }
+
+    /**
+     * The main loop for the dedicated audio thread.
+     * This is where all OpenAL calls happen.
+     */
+    private void audioLoop() {
+        // --- 1. Initialize OpenAL Context ---
+        try {
+            device = ALC10.alcOpenDevice((ByteBuffer) null); // Open default device
+            if (device == NULL) {
+                throw new IllegalStateException("Failed to open OpenAL device.");
+            }
+
+            ALCCapabilities deviceCaps = ALC.createCapabilities(device);
+
+            context = ALC10.alcCreateContext(device, (IntBuffer) null);
+            if (context == NULL) {
+                throw new IllegalStateException("Failed to create OpenAL context.");
+            }
+
+            ALC10.alcMakeContextCurrent(context);
+            AL.createCapabilities(deviceCaps); // IMPORTANT!
+
+        } catch (Exception e) {
+            System.err.println("AudioPlayer thread failed to initialize OpenAL: " + e.getMessage());
+            isClosed.set(true);
+            return; // Exit thread
+        }
+
+        System.out.println("AudioPlayer thread started, OpenAL context created.");
+
+        // --- 2. Initialize Source and Buffers ---
+        try {
+            this.sourceId = alGenSources();
+            alSourcef(sourceId, AL_GAIN, 1.0f);
+            alSourcef(sourceId, AL_PITCH, 1.0f);
+            alSource3f(sourceId, AL_POSITION, 0, 0, 0);
+            alSourcei(sourceId, AL_SOURCE_RELATIVE, AL_TRUE);
+
+            this.allBuffers = new int[NUM_BUFFERS];
+            alGenBuffers(this.allBuffers);
+            for (int bufferId : this.allBuffers) {
+                this.freeBuffers.offer(bufferId);
+            }
+        } catch (Exception e) {
+            System.err.println("AudioPlayer thread failed to initialize buffers: " + e.getMessage());
+            isClosed.set(true);
+            // Fall-through to cleanup
+        }
+
+
+        // --- 3. Main Processing Loop ---
+        while (!isClosed.get()) {
+            try {
+                // Handle flushing first
+                if (flushRequest.getAndSet(false)) {
+                    internalFlush();
+                }
+
+                if (isPlaying.get()) {
+                    // Reclaim any free buffers
+                    updateProcessedBuffers();
+
+                    // Poll for new audio data from the queue
+                    ByteBuffer data = audioQueue.poll(10, TimeUnit.MILLISECONDS);
+                    if (data != null) {
+                        Integer bufferId = freeBuffers.poll();
+                        if (bufferId != null) {
+                            // We have data and a free buffer, queue it
+                            alBufferData(bufferId, alFormat, data, sampleRate);
+                            alSourceQueueBuffers(sourceId, bufferId);
+                        } else {
+                            // No free buffer, put data back (or drop it)
+                            // For simplicity, we'll just log and drop it to avoid blocking
+                            System.err.println("Audio buffer starvation! Dropping audio packet.");
+                        }
+
+                        // Start playing if we're not already
+                        int state = alGetSourcei(sourceId, AL_SOURCE_STATE);
+                        if (state != AL_PLAYING) {
+                            alSourcePlay(sourceId);
+                        }
+                    }
+                    // If data is null, we just loop and wait (buffer underrun)
+
+                } else {
+                    // We are paused
+                    int state = alGetSourcei(sourceId, AL_SOURCE_STATE);
+                    if (state == AL_PLAYING) {
+                        alSourcePause(sourceId);
+                    }
+                    // Wait for a play() or close() command
+                    Thread.sleep(50); // Simple sleep, avoids spin-locking
+                }
+
+            } catch (InterruptedException e) {
+                // Interrupted, likely by close(). Break loop.
+                break;
+            } catch (Exception e) {
+                System.err.println("Error in audio loop: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+
+        // --- 4. Cleanup ---
+        System.out.println("AudioPlayer thread stopping...");
+        try {
+            alSourceStop(sourceId);
+            alDeleteSources(sourceId);
+            alDeleteBuffers(allBuffers);
+
+            ALC10.alcMakeContextCurrent(NULL);
+            ALC10.alcDestroyContext(context);
+            ALC10.alcCloseDevice(device);
+        } catch (Exception e) {
+            System.err.println("Error during OpenAL cleanup: " + e.getMessage());
+        }
+        System.out.println("AudioPlayer thread stopped.");
+    }
+
+    /**
+     * Called by the decoder thread to add audio data.
+     * This method is thread-safe.
+     */
+    public void queueAudio(ByteBuffer data) {
+        if (isClosed.get() || data == null || !data.hasRemaining()) return;
+
+        try {
+            // This will block if the queue is full, providing back-pressure
+            // to the decoder thread and keeping audio/video in sync.
+            audioQueue.put(data);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void updateProcessedBuffers() {
+        int processedCount = alGetSourcei(sourceId, AL_BUFFERS_PROCESSED);
+        if (processedCount > 0) {
+            int[] unqueuedBuffers = new int[processedCount];
+            alSourceUnqueueBuffers(sourceId, unqueuedBuffers);
+            for (int bufferId : unqueuedBuffers) {
+                this.freeBuffers.offer(bufferId);
+            }
+        }
+    }
+
+    /**
+     * Flushes all buffers. MUST be called from the audio thread.
+     */
+    private void internalFlush() {
+        // Stop playing
+        alSourceStop(sourceId);
+
+        // Clear our internal queue
+        audioQueue.clear();
+        freeBuffers.clear();
+
+        // Unqueue all OpenAL buffers
+        int queuedCount = alGetSourcei(sourceId, AL_BUFFERS_QUEUED);
+        if (queuedCount > 0) {
+            int[] unqueuedBuffers = new int[queuedCount];
+            alSourceUnqueueBuffers(sourceId, unqueuedBuffers);
+        }
+
+        // Re-add all buffers to the free queue
+        for (int bufferId : this.allBuffers) {
+            freeBuffers.offer(bufferId);
+        }
+        System.out.println("Audio buffers flushed.");
+    }
+
+    // --- Public Control Methods (Thread-Safe) ---
+
+    public void play() {
+        if (!audioThread.isAlive()) {
+            audioThread.start();
+        }
+        isPlaying.set(true);
+    }
+
+    public void pause() {
+        isPlaying.set(false);
+    }
+
+    public void stop() {
+        isPlaying.set(false);
+        flushRequest.set(true); // Tell audio thread to flush
+    }
+
+    /**
+     * Triggers a flush of the audio buffers.
+     * Called by VideoPlayer on loop/seek.
+     */
+    public void flushBuffers() {
+        flushRequest.set(true);
+    }
+
+    public void close() {
+        if (isClosed.getAndSet(true)) return;
+
+        isPlaying.set(false);
+        audioQueue.clear();
+
+        if (audioThread.isAlive()) {
+            audioThread.interrupt(); // Interrupt sleep/wait/poll
+            try {
+                audioThread.join(1000); // Wait for thread to die
+            } catch (InterruptedException e) {
+                System.err.println("Interrupted while closing audio thread.");
+            }
+        }
+    }
+}
+/*package com.chaoticloom.clm.client;
+
+import org.lwjgl.openal.AL;
+import org.lwjgl.openal.ALC;
 import org.lwjgl.openal.ALCCapabilities;
 import org.bytedeco.javacv.Frame;
 
@@ -17,7 +288,7 @@ import static org.lwjgl.openal.AL11.AL_SAMPLE_OFFSET;
 import static org.lwjgl.openal.ALC10.*;
 
 public class AudioPlayer {
-    /*private long device;
+    private long device;
     private long context;
     private int source;
     private int[] buffers;
@@ -355,5 +626,5 @@ public class AudioPlayer {
         synchronized (audioQueue) {
             return audioQueue.size();
         }
-    }*/
-}
+    }
+}*/
