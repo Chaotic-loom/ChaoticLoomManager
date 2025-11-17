@@ -1,1 +1,3 @@
+accessWidener	v1	named
+
 accessible method net/minecraft/client/gui/screens/ConnectScreen connect (Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;)V
