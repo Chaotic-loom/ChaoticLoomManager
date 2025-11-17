@@ -4,16 +4,44 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.resources.ResourceLocation;
-import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Unique;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Redirect;
-import org.spongepowered.asm.mixin.injection.Slice;
+import net.minecraft.util.FastColor.ARGB32;
+import org.spongepowered.asm.mixin.*;
+import org.spongepowered.asm.mixin.injection.*;
 
 @Mixin(LoadingOverlay.class)
 public class LoadingOverlayMixin {
     @Unique
-    private static final ResourceLocation DIAMOND_PICKAXE = new ResourceLocation("clm", "textures/gui/chaoticloom.png");
+    private static final ResourceLocation BRAND_TEXTURE = new ResourceLocation("clm", "textures/gui/chaoticloom.png");
+
+    @Shadow
+    @Final
+    @Mutable
+    private static int LOGO_BACKGROUND_COLOR;
+
+    @Shadow
+    @Final
+    @Mutable
+    private static int LOGO_BACKGROUND_COLOR_DARK;
+
+    static {
+        // set new values
+        LOGO_BACKGROUND_COLOR = ARGB32.color(255, 11, 25, 38);
+        LOGO_BACKGROUND_COLOR_DARK = ARGB32.color(255, 11, 25, 38);
+    }
+
+    //Lnet/minecraft/client/gui/screens/LoadingOverlay;LOGO_BACKGROUND_COLOR_DARK:I
+    // Change LOGO_BACKGROUND_COLOR
+    //@ModifyConstant(method = "<init>", constant = @Constant(intValue = -1101251))
+    /*@ModifyConstant(method = "<init>", constant = @Constant(intValue = 0xFFEF323D))
+    private int changeLogoBackgroundColor(int original) {
+        return ARGB32.color(255, 11, 25, 38);
+    }*/
+
+    // Change LOGO_BACKGROUND_COLOR_DARK
+    /*@ModifyConstant(method = "<init>", constant = @Constant(intValue = -16777216))
+    private int changeLogoBackgroundColorDark(int original) {
+        return ARGB32.color(255, 11, 25, 38);
+    }*/
 
     @Redirect(
             method = "render",
@@ -37,8 +65,8 @@ public class LoadingOverlayMixin {
             float u, float v, int tw, int th, int texW, int texH
     ) {
         // Diamond pickaxe texture is 16×16
-        int baseW = 1252;
-        int baseH = 1252;
+        int baseW = 932;
+        int baseH = 1036;
 
         // Scale down
         int scaledW = baseW / 10;
@@ -53,11 +81,10 @@ public class LoadingOverlayMixin {
 
         // Fix blending
         RenderSystem.defaultBlendFunc();
-        //guiGraphics.setColor(1f, 1f, 1f, 1f);
 
         // Draw the texture
         guiGraphics.blit(
-                DIAMOND_PICKAXE,
+                BRAND_TEXTURE,
                 centeredX, centeredY,
                 scaledW, scaledH,
                 0, 0,    // UV origin
