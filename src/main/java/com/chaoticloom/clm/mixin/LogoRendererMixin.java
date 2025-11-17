@@ -24,7 +24,7 @@ public class LogoRendererMixin {
 
         int editionX = screenWidth / 2 - 64;
         int editionY = yPosition + 44 - 7;
-        guiGraphics.blit(MINECRAFT_EDITION, editionX, editionY, 0.0F, 0.0F, 128, 14, 128, 16);
+        guiGraphics.blit(MINECRAFT_EDITION, editionX, editionY, 0.0F, 0.0F, 128, 14, 128, 14);
 
         guiGraphics.setColor(1.0F, 1.0F, 1.0F, 1.0F);
 
