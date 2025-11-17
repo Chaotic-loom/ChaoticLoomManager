@@ -1,0 +1,106 @@
+package com.chaoticloom.clm.client;
+
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+
+public class VideoPlayerController {
+    private static VideoPlayer currentVideo = null;
+    private static boolean initialized = false;
+
+    public static void initialize() {
+        if (!initialized) {
+            //HudRenderCallback.EVENT.register(VideoPlayerController::onHudRender);
+            RenderEvents.RENDER.register(VideoPlayerController::onHudRender);
+
+            initialized = true;
+            System.out.println("Video Player Controller initialized!");
+        }
+    }
+
+    public static void playVideo(String absolutePath) {
+        // Stop any currently playing video
+        stopCurrentVideo();
+
+        try {
+            // Create video player (this doesn't create OpenGL textures yet)
+            currentVideo = new VideoPlayer(absolutePath);
+            currentVideo.setLoop(false);
+
+            System.out.println("Video loaded, waiting for render thread to initialize texture...");
+
+        } catch (Exception e) {
+            System.err.println("Failed to play video: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public static void stopCurrentVideo() {
+        if (currentVideo != null) {
+            currentVideo.close();
+            currentVideo = null;
+        }
+    }
+
+    public static boolean isVideoPlaying() {
+        return currentVideo != null && currentVideo.isPlaying();
+    }
+
+    private static void onHudRender(GuiGraphics drawContext, float tickDelta) {
+        if (currentVideo != null) {
+            // Initialize texture on first render call (guaranteed to be on render thread)
+            if (!currentVideo.isInitialized()) {
+                currentVideo.initializeTexture();
+                // Start playing after texture is initialized
+                if (currentVideo.isInitialized()) {
+                    currentVideo.play();
+                    System.out.println("Video playback started!");
+                }
+            }
+
+            // Update and render if playing
+            if (currentVideo.isPlaying()) {
+                currentVideo.update();
+                renderVideoFullscreen(drawContext, currentVideo);
+            }
+        }
+    }
+
+    private static void renderVideoFullscreen(GuiGraphics drawContext, VideoPlayer videoPlayer) {
+        Minecraft client = Minecraft.getInstance();
+        if (!videoPlayer.isInitialized()) return;
+
+        int screenWidth = client.getWindow().getGuiScaledWidth();
+        int screenHeight = client.getWindow().getGuiScaledHeight();
+
+        // Calculate aspect ratio preserving dimensions
+        float videoAspect = (float) videoPlayer.getWidth() / videoPlayer.getHeight();
+        float screenAspect = (float) screenWidth / screenHeight;
+
+        int width, height;
+        if (videoAspect > screenAspect) {
+            width = screenWidth;
+            height = (int) (screenWidth / videoAspect);
+        } else {
+            height = screenHeight;
+            width = (int) (screenHeight * videoAspect);
+        }
+
+        int x = (screenWidth - width) / 2;
+        int y = (screenHeight - height) / 2;
+
+        // Render the video texture
+        drawContext.blit(
+                videoPlayer.getTexture(),
+                x, y,
+                0, 0,
+                width, height,
+                width, height
+        );
+    }
+
+    // Method to manually trigger video playback (useful for testing)
+    public static void playTestVideo() {
+        playVideo("/home/restonic4/test.mp4");
+    }
+}

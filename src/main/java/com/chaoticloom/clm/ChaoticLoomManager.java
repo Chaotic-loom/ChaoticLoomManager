@@ -1,6 +1,9 @@
 package com.chaoticloom.clm;
 
+import com.chaoticloom.clm.client.VideoPlayer;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.util.FastColor;
 
 public class ChaoticLoomManager implements ModInitializer {

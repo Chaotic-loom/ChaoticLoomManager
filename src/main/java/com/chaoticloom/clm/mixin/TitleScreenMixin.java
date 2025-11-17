@@ -1,5 +1,8 @@
 package com.chaoticloom.clm.mixin;
 
+import com.chaoticloom.clm.ChaoticLoomManager;
+import com.chaoticloom.clm.client.RenderEvents;
+import com.chaoticloom.clm.client.VideoPlayer;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -67,7 +70,7 @@ public abstract class TitleScreenMixin extends Screen {
         return guiEventListener;
     }
 
-    @Inject(method = "createNormalMenuOptions", at = @At("HEAD"), cancellable = true)
+    /*@Inject(method = "createNormalMenuOptions", at = @At("HEAD"), cancellable = true)
     private void createNormalMenuOptions(int startingYPos, int verticalSpacingBetweenButtons, CallbackInfo ci) {
         Button serverButton = createButton(
                 Component.translatable("clm.title-screen.join-event"),
@@ -91,7 +94,7 @@ public abstract class TitleScreenMixin extends Screen {
         );
 
         ci.cancel();
-    }
+    }*/
 
     @Unique
     private static final ResourceLocation BRAND_TEXTURE = new ResourceLocation("clm", "textures/gui/chaoticloom.png");

@@ -1,0 +1,21 @@
+package com.chaoticloom.clm.client;
+
+import net.fabricmc.fabric.api.event.Event;
+import net.fabricmc.fabric.api.event.EventFactory;
+import net.minecraft.client.gui.GuiGraphics;
+
+public class RenderEvents {
+    public static final Event<RenderEvent> RENDER =
+            EventFactory.createArrayBacked(RenderEvent.class,
+                    (listeners) -> (drawContext, tickDelta) -> {
+                        for (RenderEvent listener : listeners) {
+                            listener.invoke(drawContext, tickDelta);
+                        }
+                    }
+            );
+
+    @FunctionalInterface
+    public interface RenderEvent {
+        void invoke(GuiGraphics drawContext, float tickDelta);
+    }
+}

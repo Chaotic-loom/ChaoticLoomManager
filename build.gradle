@@ -24,6 +24,17 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    implementation 'org.bytedeco:javacv-platform:1.5.8'
+    implementation 'org.bytedeco:ffmpeg-platform:5.1.2-1.5.8'
+}
+
+configurations {
+    all*.exclude group: 'org.bytedeco', module: 'opencv'
+    all*.exclude group: 'org.bytedeco', module: 'flycapture'
+    all*.exclude group: 'org.bytedeco', module: 'libdc1394'
+    all*.exclude group: 'org.bytedeco', module: 'libfreenect2'
+    all*.exclude group: 'org.bytedeco', module: 'videoinput'
 }
 
 processResources {
