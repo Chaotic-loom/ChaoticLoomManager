@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "clm",
+  "version": "${version}",
+  "name": "ChaoticLoomManager",
+  "description": "",
+  "authors": [],
+  "contact": {
+    "repo": "https://github.com/restonic4/ChaoticLoomManager"
+  },
+  "license": "MIT",
+  "icon": "assets/clm/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.chaoticloom.clm.client.ChaoticLoomManagerClient"
+    ],
+    "main": [
+      "com.chaoticloom.clm.ChaoticLoomManager"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
