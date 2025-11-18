@@ -23,6 +23,16 @@ public class ChaoticLoomManagerClient implements ClientModInitializer {
         Path configDir = FabricLoader.getInstance().getConfigDir();
         Path flagFile = configDir.resolve("clm_intro_played.dat");
 
+        RenderEvents.VIDEO_FINISHED.register(() -> {
+            System.out.println("Video ended!");
+            try {
+                Files.createFile(flagFile);
+                System.out.println("Intro flag file created successfully.");
+            } catch (IOException e) {
+                System.err.println("Failed to create intro flag file: " + e.getMessage());
+            }
+        });
+
         // Wait for the game to fully load before playing video
         ClientTickEvents.START_CLIENT_TICK.register(client -> {
             if (!startupLogicComplete) {
@@ -43,15 +53,6 @@ public class ChaoticLoomManagerClient implements ClientModInitializer {
                         Thread.sleep(1000);
 
                         VideoPlayerController.playVideo(ChaoticLoomManager.TRAILER);
-
-                        // 3. Create the file immediately so it doesn't play next time
-                        try {
-                            Files.createFile(flagFile);
-                            System.out.println("Intro flag file created successfully.");
-                        } catch (IOException e) {
-                            System.err.println("Failed to create intro flag file: " + e.getMessage());
-                        }
-
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }

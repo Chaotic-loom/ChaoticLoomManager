@@ -249,6 +249,7 @@ public class VideoRenderer {
             needsCatchUp = false;
         } else {
             playing.set(false);
+            RenderEvents.VIDEO_FINISHED.invoker().invoke();
         }
     }
 

@@ -18,4 +18,18 @@ public class RenderEvents {
     public interface RenderEvent {
         void invoke(GuiGraphics drawContext, float tickDelta);
     }
+
+    public static final Event<VideoFinishedEvent> VIDEO_FINISHED =
+            EventFactory.createArrayBacked(VideoFinishedEvent.class,
+                    (listeners) -> () -> {
+                        for (VideoFinishedEvent listener : listeners) {
+                            listener.invoke();
+                        }
+                    }
+            );
+
+    @FunctionalInterface
+    public interface VideoFinishedEvent {
+        void invoke();
+    }
 }
