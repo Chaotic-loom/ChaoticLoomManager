@@ -8,6 +8,7 @@ import net.minecraft.server.packs.resources.Resource;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
+import org.lwjgl.system.MemoryUtil;
 
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -184,6 +185,7 @@ public class VideoPlayer {
 
                 // If we're more than 2 frames behind, we need to catch up
                 if (waitTimeNanos < -frameTimeNanos * 2) {
+                    System.out.println("Catch Up!");
                     needsCatchUp = true;
                     // Skip sleep and decode immediately
                 } else if (waitTimeNanos > 1000000) { // Only sleep if more than 1ms
@@ -239,21 +241,47 @@ public class VideoPlayer {
     }
 
     private void convertFrameToNativeImage(Frame frame, NativeImage image) {
-        ByteBuffer buffer = (ByteBuffer) frame.image[0];
+        ByteBuffer sourceBuffer = (ByteBuffer) frame.image[0];
 
-        // Use bulk operations where possible
-        for (int y = 0; y < videoHeight; y++) {
-            for (int x = 0; x < videoWidth; x++) {
-                int pos = (y * videoWidth + x) * 4;
+        // Get direct access to NativeImage's internal buffer
+        long imagePointer = image.pixels;
 
-                int r = buffer.get(pos) & 0xFF;
-                int g = buffer.get(pos + 1) & 0xFF;
-                int b = buffer.get(pos + 2) & 0xFF;
-                int a = buffer.get(pos + 3) & 0xFF;
+        if (imagePointer != 0) {
+            // Direct memory copy - MUCH faster!
+            int totalBytes = videoWidth * videoHeight * 4;
 
-                int abgrColor = (a << 24) | (b << 16) | (g << 8) | r;
-                image.setPixelRGBA(x, y, abgrColor);
-            }
+            // Ensure buffer is positioned at the start
+            sourceBuffer.position(0);
+
+            // Use unsafe memory copy or NIO bulk operations
+            // Option 1: Using MemoryUtil from LWJGL
+            MemoryUtil.memCopy(
+                    MemoryUtil.memAddress(sourceBuffer),
+                    imagePointer,
+                    totalBytes
+            );
+        } else {
+            // Fallback: still faster than individual pixels
+            bulkConvertFallback(sourceBuffer, image);
+        }
+    }
+
+    private void bulkConvertFallback(ByteBuffer sourceBuffer, NativeImage image) {
+        sourceBuffer.position(0);
+        int totalPixels = videoWidth * videoHeight;
+
+        // Process in batches to reduce method call overhead
+        for (int i = 0; i < totalPixels; i++) {
+            int r = sourceBuffer.get() & 0xFF;
+            int g = sourceBuffer.get() & 0xFF;
+            int b = sourceBuffer.get() & 0xFF;
+            int a = sourceBuffer.get() & 0xFF;
+
+            int abgrColor = (a << 24) | (b << 16) | (g << 8) | r;
+
+            int x = i % videoWidth;
+            int y = i / videoWidth;
+            image.setPixelRGBA(x, y, abgrColor);
         }
     }
 
