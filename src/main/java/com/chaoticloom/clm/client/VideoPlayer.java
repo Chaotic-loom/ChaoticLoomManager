@@ -36,7 +36,6 @@ public class VideoPlayer {
 
     // Threading components
     private Thread decoderThread;
-    private final AtomicReference<NativeImage> nextFrameImage = new AtomicReference<>();
 
     // Timing and synchronization
     private long baseTimeNanos = 0; // Base time for frame scheduling
@@ -44,6 +43,12 @@ public class VideoPlayer {
     private volatile boolean needsCatchUp = false;
 
     private Path tempFile; // temporary file used when loading from a resource
+
+    // Double buffering, pre-allocate two images
+    private NativeImage bufferA;
+    private NativeImage bufferB;
+    private volatile NativeImage currentDecodeBuffer;
+    private final AtomicReference<NativeImage> nextFrameImage = new AtomicReference<>();
 
     public VideoPlayer(String filePath) {
         loadResource(filePath);
@@ -98,12 +103,18 @@ public class VideoPlayer {
 
     public void initializeTexture() {
         if (initialized.get() || grabber == null) return;
-
         Minecraft client = Minecraft.getInstance();
         try {
+            // Initialize texture
             NativeImage nativeImage = new NativeImage(videoWidth, videoHeight, true);
             texture = new DynamicTexture(nativeImage);
             textureIdentifier = client.getTextureManager().register("video_frame", texture);
+
+            // Pre-allocate decode buffers
+            bufferA = new NativeImage(videoWidth, videoHeight, true);
+            bufferB = new NativeImage(videoWidth, videoHeight, true);
+            currentDecodeBuffer = bufferA;
+
             initialized.set(true);
             System.out.println("Video texture initialized: " + textureIdentifier);
         } catch (Exception e) {
@@ -144,10 +155,7 @@ public class VideoPlayer {
             if (grabber != null) {
                 grabber.setVideoTimestamp(0);
             }
-            NativeImage oldFrame = nextFrameImage.getAndSet(null);
-            if (oldFrame != null) {
-                oldFrame.close();
-            }
+            nextFrameImage.set(null);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -172,24 +180,15 @@ public class VideoPlayer {
     private void decoderLoop() {
         System.out.println("Decoder thread started.");
 
-        // Pre-allocate frame buffer to reduce GC pressure
-        NativeImage currentFrame = new NativeImage(videoWidth, videoHeight, true);
-
         try {
             while (playing.get()) {
                 long targetTimeNanos = baseTimeNanos + (framesDecoded * frameTimeNanos);
                 long currentTimeNanos = System.nanoTime();
-
-                // Calculate how long to wait
                 long waitTimeNanos = targetTimeNanos - currentTimeNanos;
 
-                // If we're more than 2 frames behind, we need to catch up
                 if (waitTimeNanos < -frameTimeNanos * 2) {
-                    System.out.println("Catch Up!");
                     needsCatchUp = true;
-                    // Skip sleep and decode immediately
-                } else if (waitTimeNanos > 1000000) { // Only sleep if more than 1ms
-                    // Use parkNanos for more precise timing than Thread.sleep
+                } else if (waitTimeNanos > 1000000) {
                     LockSupport.parkNanos(waitTimeNanos);
                 }
 
@@ -200,21 +199,22 @@ public class VideoPlayer {
                 }
 
                 if (frame.image != null) {
-                    // Reuse the pre-allocated NativeImage instead of creating new ones
-                    convertFrameToNativeImage(frame, currentFrame);
+                    // Decode directly into current buffer (no allocation!)
+                    convertFrameToNativeImage(frame, currentDecodeBuffer);
 
-                    // Create a new image only when necessary (when the frame will be used)
-                    NativeImage frameToSend = new NativeImage(videoWidth, videoHeight, true);
-                    frameToSend.copyFrom(currentFrame);
+                    // Swap buffers - the old nextFrame becomes our new decode target
+                    NativeImage previousFrame = nextFrameImage.getAndSet(currentDecodeBuffer);
 
-                    NativeImage oldFrame = nextFrameImage.getAndSet(frameToSend);
-                    if (oldFrame != null) {
-                        oldFrame.close();
+                    // The buffer we just swapped out becomes our next decode target
+                    if (previousFrame != null) {
+                        currentDecodeBuffer = previousFrame;
+                    } else {
+                        // First frame - use the other buffer
+                        currentDecodeBuffer = (currentDecodeBuffer == bufferA) ? bufferB : bufferA;
                     }
 
                     framesDecoded++;
 
-                    // Reset catch-up flag once we're back on schedule
                     if (needsCatchUp && waitTimeNanos >= -frameTimeNanos) {
                         needsCatchUp = false;
                     }
@@ -223,9 +223,8 @@ public class VideoPlayer {
         } catch (Exception e) {
             e.printStackTrace();
             playing.set(false);
-        } finally {
-            currentFrame.close();
         }
+
         System.out.println("Decoder thread stopped.");
     }
 
@@ -288,23 +287,16 @@ public class VideoPlayer {
     public void update() {
         if (!playing.get() || !initialized.get()) return;
 
-        NativeImage imageToUpload = nextFrameImage.getAndSet(null);
-
+        NativeImage imageToUpload = nextFrameImage.get();  // Just read, don't clear
         if (imageToUpload != null) {
             try {
                 NativeImage textureImage = texture.getPixels();
                 if (textureImage != null) {
-                    // This is the fast native copy
                     textureImage.copyFrom(imageToUpload);
                     texture.upload();
-
-                    FPSTracker.onFrame();
-                    System.out.println(FPSTracker.getFps());
                 }
             } catch (Exception e) {
                 e.printStackTrace();
-            } finally {
-                imageToUpload.close();
             }
         }
     }
@@ -346,6 +338,16 @@ public class VideoPlayer {
             if (texture != null) {
                 texture.close();
             }
+
+            if (bufferA != null) {
+                bufferA.close();
+                bufferA = null;
+            }
+            if (bufferB != null) {
+                bufferB.close();
+                bufferB = null;
+            }
+
             if (tempFile != null) {
                 try {
                     Files.deleteIfExists(tempFile);
