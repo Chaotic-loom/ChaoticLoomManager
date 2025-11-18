@@ -21,8 +21,7 @@ public class ChaoticLoomManagerClient implements ClientModInitializer {
                 client.execute(() -> {
                     try {
                         Thread.sleep(1000);
-                        //VideoPlayerController.playVideo("/home/restonic4/test.mp4");
-                        VideoPlayerController.playVideo(new ResourceLocation(ChaoticLoomManager.MOD_ID, "videos/test2.mp4"));
+                        VideoPlayerController.playVideo(new ResourceLocation(ChaoticLoomManager.MOD_ID, "videos/trailer.mp4"));
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }

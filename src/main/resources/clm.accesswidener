@@ -4,3 +4,5 @@ accessible method net/minecraft/client/gui/screens/ConnectScreen connect (Lnet/m
 accessible field net/minecraft/client/gui/screens/SoundOptionsScreen list Lnet/minecraft/client/gui/components/OptionsList;
 accessible class net/minecraft/client/gui/components/OptionsList$Entry
 accessible field com/mojang/blaze3d/platform/NativeImage pixels J
+accessible field net/minecraft/client/Minecraft pausePartialTick F
+accessible field net/minecraft/client/Minecraft timer Lnet/minecraft/client/Timer;

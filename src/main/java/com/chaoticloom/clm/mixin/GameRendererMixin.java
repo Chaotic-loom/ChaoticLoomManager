@@ -23,13 +23,11 @@ public class GameRendererMixin {
             method = "render",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/util/profiling/ProfilerFiller;push(Ljava/lang/String;)V",
+                    target = "Lcom/mojang/blaze3d/systems/RenderSystem;applyModelViewMatrix()V",
                     ordinal = 1
             )
     )
     private void beforeProfilerPush(float tickDelta, long l, boolean bl, CallbackInfo ci, @Local GuiGraphics guiGraphics) {
-        /*onFrame();
-        System.out.println(getFps());*/
         RenderEvents.RENDER.invoker().invoke(guiGraphics, tickDelta);
     }
 }

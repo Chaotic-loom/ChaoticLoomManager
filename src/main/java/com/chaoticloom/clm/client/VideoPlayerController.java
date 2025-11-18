@@ -33,7 +33,7 @@ public class VideoPlayerController {
 
         try {
             currentVideo = supplier.get();
-            currentVideo.setLoop(true);
+            currentVideo.setLoop(false);
 
             System.out.println("Video loaded, waiting for render thread to initialize texture...");
         } catch (Exception e) {

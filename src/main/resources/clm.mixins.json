@@ -6,6 +6,8 @@
   "mixins": [
   ],
   "client": [
+    "DisableInputMixin$Keyboard",
+    "DisableInputMixin$Mouse",
     "GameRendererMixin",
     "LoadingOverlayMixin",
     "LogoRendererMixin",
