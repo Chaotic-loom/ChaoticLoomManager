@@ -1,8 +1,10 @@
 package com.chaoticloom.clm.client;
 
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.resources.ResourceLocation;
+
+import java.util.function.Supplier;
 
 public class VideoPlayerController {
     private static VideoPlayer currentVideo = null;
@@ -19,16 +21,21 @@ public class VideoPlayerController {
     }
 
     public static void playVideo(String absolutePath) {
-        // Stop any currently playing video
+        playVideoInternal(() -> new VideoPlayer(absolutePath));
+    }
+
+    public static void playVideo(ResourceLocation location) {
+        playVideoInternal(() -> new VideoPlayer(location));
+    }
+
+    private static void playVideoInternal(Supplier<VideoPlayer> supplier) {
         stopCurrentVideo();
 
         try {
-            // Create video player (this doesn't create OpenGL textures yet)
-            currentVideo = new VideoPlayer(absolutePath);
+            currentVideo = supplier.get();
             currentVideo.setLoop(false);
 
             System.out.println("Video loaded, waiting for render thread to initialize texture...");
-
         } catch (Exception e) {
             System.err.println("Failed to play video: " + e.getMessage());
             e.printStackTrace();

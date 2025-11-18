@@ -4,11 +4,17 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.resources.Resource;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 
+import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
@@ -31,12 +37,43 @@ public class VideoPlayer {
     private Thread decoderThread;
     private final AtomicReference<NativeImage> nextFrameImage = new AtomicReference<>();
 
-    // **NEW**: Timing and synchronization improvements
+    // Timing and synchronization
     private long baseTimeNanos = 0; // Base time for frame scheduling
     private int framesDecoded = 0; // Frame counter for more stable timing
     private volatile boolean needsCatchUp = false;
 
+    private Path tempFile; // temporary file used when loading from a resource
+
     public VideoPlayer(String filePath) {
+        loadResource(filePath);
+    }
+
+    public VideoPlayer(ResourceLocation resourceLocation) {
+        try {
+            System.out.println("Loading video resource: " + resourceLocation);
+
+            // Obtain resource input stream from Minecraft's resource manager
+            Minecraft client = Minecraft.getInstance();
+            Optional<Resource> resource = client.getResourceManager().getResource(resourceLocation);
+            if (resource.isEmpty()) {
+                System.out.println("Resource not found!");
+                return;
+            }
+
+            // Copy resource to a temp file (FFmpeg handles file paths reliably)
+            try (InputStream is = resource.get().open()) {
+                tempFile = Files.createTempFile("clm_video_", ".mp4");
+                Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            loadResource(tempFile.toFile().getAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("Failed to initialize video player from ResourceLocation: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void loadResource(String filePath) {
         try {
             System.out.println("Loading video from: " + filePath);
             grabber = new FFmpegFrameGrabber(filePath);
@@ -131,7 +168,6 @@ public class VideoPlayer {
         }
     }
 
-    // **IMPROVED**: Better timing logic with catch-up mechanism
     private void decoderLoop() {
         System.out.println("Decoder thread started.");
 
@@ -202,7 +238,6 @@ public class VideoPlayer {
         }
     }
 
-    // **IMPROVED**: Reuse existing NativeImage to reduce allocations
     private void convertFrameToNativeImage(Frame frame, NativeImage image) {
         ByteBuffer buffer = (ByteBuffer) frame.image[0];
 
@@ -222,7 +257,6 @@ public class VideoPlayer {
         }
     }
 
-    // **IMPROVED**: More efficient update with better frame management
     public void update() {
         if (!playing.get() || !initialized.get()) return;
 
@@ -283,6 +317,14 @@ public class VideoPlayer {
             }
             if (texture != null) {
                 texture.close();
+            }
+            if (tempFile != null) {
+                try {
+                    Files.deleteIfExists(tempFile);
+                    tempFile = null;
+                } catch (Exception e) {
+                    tempFile.toFile().deleteOnExit();
+                }
             }
         } catch (Exception e) {
             e.printStackTrace();

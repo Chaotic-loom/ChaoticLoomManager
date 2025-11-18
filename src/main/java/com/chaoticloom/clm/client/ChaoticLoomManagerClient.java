@@ -1,7 +1,9 @@
 package com.chaoticloom.clm.client;
 
+import com.chaoticloom.clm.ChaoticLoomManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.resources.ResourceLocation;
 
 public class ChaoticLoomManagerClient implements ClientModInitializer {
     private boolean videoStarted = false;
@@ -18,8 +20,9 @@ public class ChaoticLoomManagerClient implements ClientModInitializer {
                 // Small delay to ensure everything is loaded
                 client.execute(() -> {
                     try {
-                        Thread.sleep(1000); // Wait 1 second after world load
-                        VideoPlayerController.playVideo("/home/restonic4/test.mp4");
+                        Thread.sleep(1000);
+                        //VideoPlayerController.playVideo("/home/restonic4/test.mp4");
+                        VideoPlayerController.playVideo(new ResourceLocation(ChaoticLoomManager.MOD_ID, "videos/test.mp4"));
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
