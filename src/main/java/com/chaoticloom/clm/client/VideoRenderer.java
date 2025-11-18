@@ -20,7 +20,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
-public class VideoPlayer {
+import static com.chaoticloom.clm.ChaoticLoomManager.LOGGER;
+
+/**
+ * Video renderer that decodes frames on a background thread and uploads them as a DynamicTexture.
+ * Can load videos from absolute path or with ResourceLocations.
+ * Uses FFMPEG.
+ */
+public class VideoRenderer {
     private FFmpegFrameGrabber grabber;
     private DynamicTexture texture;
     private ResourceLocation textureIdentifier;
@@ -39,30 +46,30 @@ public class VideoPlayer {
 
     // Timing and synchronization
     private long baseTimeNanos = 0; // Base time for frame scheduling
-    private int framesDecoded = 0; // Frame counter for more stable timing
+    private int framesDecoded = 0; // Frame counter
     private volatile boolean needsCatchUp = false;
 
-    private Path tempFile; // temporary file used when loading from a resource
+    private Path tempFile; // temporary file used when loading from a ResourceLocation
 
-    // Double buffering, pre-allocate two images
+    // Double buffering
     private NativeImage bufferA;
     private NativeImage bufferB;
     private volatile NativeImage currentDecodeBuffer;
     private final AtomicReference<NativeImage> nextFrameImage = new AtomicReference<>();
 
-    public VideoPlayer(String filePath) {
+    public VideoRenderer(String filePath) {
         loadResource(filePath);
     }
 
-    public VideoPlayer(ResourceLocation resourceLocation) {
+    public VideoRenderer(ResourceLocation resourceLocation) {
         try {
-            System.out.println("Loading video resource: " + resourceLocation);
+            LOGGER.info("Loading video resource: {}", resourceLocation);
 
             // Obtain resource input stream from Minecraft's resource manager
             Minecraft client = Minecraft.getInstance();
             Optional<Resource> resource = client.getResourceManager().getResource(resourceLocation);
             if (resource.isEmpty()) {
-                System.out.println("Resource not found!");
+                LOGGER.error("Resource not found: {}", resourceLocation);
                 return;
             }
 
@@ -74,37 +81,43 @@ public class VideoPlayer {
 
             loadResource(tempFile.toFile().getAbsolutePath());
         } catch (Exception e) {
-            System.err.println("Failed to initialize video player from ResourceLocation: " + e.getMessage());
-            e.printStackTrace();
+            LOGGER.error("Failed to initialize video player from ResourceLocation: {}", resourceLocation, e);
         }
     }
 
+    /**
+     * Called internally for constructors
+     * @param filePath The file path to load the video from.
+     */
     private void loadResource(String filePath) {
         try {
-            System.out.println("Loading video from: " + filePath);
+            LOGGER.info("Loading video from: {}", filePath);
             grabber = new FFmpegFrameGrabber(filePath);
             grabber.setPixelFormat(avutil.AV_PIX_FMT_RGBA);
             grabber.start();
 
             videoWidth = grabber.getImageWidth();
             videoHeight = grabber.getImageHeight();
+
             double frameRate = Math.max(grabber.getFrameRate(), 1.0); // Ensure positive frame rate
             frameTime = 1.0 / frameRate;
             frameTimeNanos = (long) (frameTime * 1_000_000_000.0);
 
-            System.out.println("Video loaded: " + videoWidth + "x" + videoHeight +
-                    ", FPS: " + frameRate + ", Frame time: " + frameTime + "s");
-
+            LOGGER.info("Video loaded: {}x{}, FPS: {}, Frame time: {}s", videoWidth, videoHeight, frameRate, frameTime);
         } catch (Exception e) {
-            System.err.println("Failed to initialize video player: " + e.getMessage());
-            e.printStackTrace();
+            LOGGER.error("Failed to initialize video player from path: {}", filePath, e);
         }
     }
 
+    /**
+     * Must be called on the render thread before calling play().
+     */
     public void initializeTexture() {
         if (initialized.get() || grabber == null) return;
-        Minecraft client = Minecraft.getInstance();
+
         try {
+            Minecraft client = Minecraft.getInstance();
+
             // Initialize texture
             NativeImage nativeImage = new NativeImage(videoWidth, videoHeight, true);
             texture = new DynamicTexture(nativeImage);
@@ -116,20 +129,19 @@ public class VideoPlayer {
             currentDecodeBuffer = bufferA;
 
             initialized.set(true);
-            System.out.println("Video texture initialized: " + textureIdentifier);
+            LOGGER.info("Video texture initialized: {}", textureIdentifier);
         } catch (Exception e) {
-            System.err.println("Failed to initialize video texture: " + e.getMessage());
-            e.printStackTrace();
+            LOGGER.error("Failed to initialize video texture", e);
         }
     }
 
     public void play() {
         if (!initialized.get()) {
-            System.err.println("Texture not initialized! Call initializeTexture() on render thread first.");
+            LOGGER.error("Texture not initialized! Call initializeTexture() on render thread first.");
             return;
         }
         if (playing.get() && decoderThread != null && decoderThread.isAlive()) {
-            return;
+            return; // already playing
         }
 
         playing.set(true);
@@ -140,7 +152,8 @@ public class VideoPlayer {
         decoderThread = new Thread(this::decoderLoop, "Video-Decoder-Thread");
         decoderThread.setDaemon(true);
         decoderThread.start();
-        System.out.println("Video playback started!");
+
+        LOGGER.info("Video playback started");
     }
 
     public void pause() {
@@ -157,7 +170,7 @@ public class VideoPlayer {
             }
             nextFrameImage.set(null);
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Error while stopping video", e);
         }
     }
 
@@ -166,11 +179,11 @@ public class VideoPlayer {
             try {
                 decoderThread.join(1000);
                 if (decoderThread.isAlive()) {
-                    System.err.println("Decoder thread did not stop, interrupting.");
+                    LOGGER.warn("Decoder thread did not stop in time, interrupting.");
                     decoderThread.interrupt();
                 }
             } catch (InterruptedException e) {
-                System.err.println("Interrupted while joining decoder thread.");
+                LOGGER.error("Interrupted while joining decoder thread", e);
                 Thread.currentThread().interrupt();
             }
             decoderThread = null;
@@ -178,7 +191,7 @@ public class VideoPlayer {
     }
 
     private void decoderLoop() {
-        System.out.println("Decoder thread started.");
+        LOGGER.debug("Decoder thread started.");
 
         try {
             while (playing.get()) {
@@ -199,17 +212,17 @@ public class VideoPlayer {
                 }
 
                 if (frame.image != null) {
-                    // Decode directly into current buffer (no allocation!)
+                    // Decode directly into current buffer (no allocation)
                     convertFrameToNativeImage(frame, currentDecodeBuffer);
 
-                    // Swap buffers - the old nextFrame becomes our new decode target
+                    // Swap buffers.
                     NativeImage previousFrame = nextFrameImage.getAndSet(currentDecodeBuffer);
 
                     // The buffer we just swapped out becomes our next decode target
                     if (previousFrame != null) {
                         currentDecodeBuffer = previousFrame;
                     } else {
-                        // First frame - use the other buffer
+                        // First frame: use the other buffer
                         currentDecodeBuffer = (currentDecodeBuffer == bufferA) ? bufferB : bufferA;
                     }
 
@@ -221,11 +234,11 @@ public class VideoPlayer {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Exception in decoder loop", e);
             playing.set(false);
         }
 
-        System.out.println("Decoder thread stopped.");
+        LOGGER.debug("Decoder thread stopped.");
     }
 
     private void handleVideoEnd() throws FFmpegFrameGrabber.Exception {
@@ -246,21 +259,20 @@ public class VideoPlayer {
         long imagePointer = image.pixels;
 
         if (imagePointer != 0) {
-            // Direct memory copy - MUCH faster!
+            // Direct memory copy
             int totalBytes = videoWidth * videoHeight * 4;
 
             // Ensure buffer is positioned at the start
             sourceBuffer.position(0);
 
             // Use unsafe memory copy or NIO bulk operations
-            // Option 1: Using MemoryUtil from LWJGL
             MemoryUtil.memCopy(
                     MemoryUtil.memAddress(sourceBuffer),
                     imagePointer,
                     totalBytes
             );
         } else {
-            // Fallback: still faster than individual pixels
+            // Fallback
             bulkConvertFallback(sourceBuffer, image);
         }
     }
@@ -269,7 +281,7 @@ public class VideoPlayer {
         sourceBuffer.position(0);
         int totalPixels = videoWidth * videoHeight;
 
-        // Process in batches to reduce method call overhead
+        // Process in batches to reduce method call overheadc
         for (int i = 0; i < totalPixels; i++) {
             int r = sourceBuffer.get() & 0xFF;
             int g = sourceBuffer.get() & 0xFF;
@@ -284,6 +296,9 @@ public class VideoPlayer {
         }
     }
 
+    /**
+     * Called on the render thread to upload the latest decoded frame (if any) to the GPU.
+     */
     public void update() {
         if (!playing.get() || !initialized.get()) return;
 
@@ -296,7 +311,7 @@ public class VideoPlayer {
                     texture.upload();
                 }
             } catch (Exception e) {
-                e.printStackTrace();
+                LOGGER.error("Failed to upload texture frame", e);
             }
         }
     }
@@ -354,10 +369,11 @@ public class VideoPlayer {
                     tempFile = null;
                 } catch (Exception e) {
                     tempFile.toFile().deleteOnExit();
+                    LOGGER.warn("Failed to delete temp file, will delete on exit", e);
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Error while closing VideoPlayer", e);
         }
     }
 }

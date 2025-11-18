@@ -7,7 +7,7 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.function.Supplier;
 
 public class VideoPlayerController {
-    private static VideoPlayer currentVideo = null;
+    private static VideoRenderer currentVideo = null;
     private static boolean initialized = false;
 
     public static void initialize() {
@@ -21,14 +21,14 @@ public class VideoPlayerController {
     }
 
     public static void playVideo(String absolutePath) {
-        playVideoInternal(() -> new VideoPlayer(absolutePath));
+        playVideoInternal(() -> new VideoRenderer(absolutePath));
     }
 
     public static void playVideo(ResourceLocation location) {
-        playVideoInternal(() -> new VideoPlayer(location));
+        playVideoInternal(() -> new VideoRenderer(location));
     }
 
-    private static void playVideoInternal(Supplier<VideoPlayer> supplier) {
+    private static void playVideoInternal(Supplier<VideoRenderer> supplier) {
         stopCurrentVideo();
 
         try {
@@ -73,15 +73,15 @@ public class VideoPlayerController {
         }
     }
 
-    private static void renderVideoFullscreen(GuiGraphics drawContext, VideoPlayer videoPlayer) {
+    private static void renderVideoFullscreen(GuiGraphics drawContext, VideoRenderer videoRenderer) {
         Minecraft client = Minecraft.getInstance();
-        if (!videoPlayer.isInitialized()) return;
+        if (!videoRenderer.isInitialized()) return;
 
         int screenWidth = client.getWindow().getGuiScaledWidth();
         int screenHeight = client.getWindow().getGuiScaledHeight();
 
         // Calculate aspect ratio preserving dimensions
-        float videoAspect = (float) videoPlayer.getWidth() / videoPlayer.getHeight();
+        float videoAspect = (float) videoRenderer.getWidth() / videoRenderer.getHeight();
         float screenAspect = (float) screenWidth / screenHeight;
 
         int width, height;
@@ -98,7 +98,7 @@ public class VideoPlayerController {
 
         // Render the video texture
         drawContext.blit(
-                videoPlayer.getTexture(),
+                videoRenderer.getTexture(),
                 x, y,
                 0, 0,
                 width, height,
