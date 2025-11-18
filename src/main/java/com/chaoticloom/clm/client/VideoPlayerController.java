@@ -9,10 +9,10 @@ import java.util.function.Supplier;
 public class VideoPlayerController {
     private static VideoRenderer currentVideo = null;
     private static boolean initialized = false;
+    private static final int backgroundColor = 0xFF000000;
 
     public static void initialize() {
         if (!initialized) {
-            //HudRenderCallback.EVENT.register(VideoPlayerController::onHudRender);
             RenderEvents.RENDER.register(VideoPlayerController::onHudRender);
 
             initialized = true;
@@ -96,6 +96,9 @@ public class VideoPlayerController {
         int x = (screenWidth - width) / 2;
         int y = (screenHeight - height) / 2;
 
+        // Render black background
+        drawContext.fill(0, 0, screenWidth, screenHeight, backgroundColor);
+
         // Render the video texture
         drawContext.blit(
                 videoRenderer.getTexture(),
@@ -104,10 +107,5 @@ public class VideoPlayerController {
                 width, height,
                 width, height
         );
-    }
-
-    // Method to manually trigger video playback (useful for testing)
-    public static void playTestVideo() {
-        playVideo("/home/restonic4/test.mp4");
     }
 }
