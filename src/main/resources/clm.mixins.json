@@ -12,6 +12,8 @@
     "LoadingOverlayMixin",
     "LogoRendererMixin",
     "OnBoardingScreenMixin",
+    "OptionsMixin",
+    "SoundEngineMixin",
     "TitleScreenMixin"
   ],
   "injectors": {

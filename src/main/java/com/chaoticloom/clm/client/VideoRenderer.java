@@ -198,6 +198,8 @@ public class VideoRenderer {
         // Audio
         if (audioPlayer != null) {
             audioPlayer.stop();
+            //audioPlayer.cleanup();
+            //audioPlayer = null;
         }
 
         joinDecoderThread();
@@ -287,8 +289,16 @@ public class VideoRenderer {
             baseTimeNanos = System.nanoTime();
             framesDecoded = 0;
             needsCatchUp = false;
+
+            if (audioPlayer != null) {
+                audioPlayer.stop();
+                audioPlayer.play();
+            }
         } else {
             playing.set(false);
+            if (audioPlayer != null) {
+                audioPlayer.stop();
+            }
             RenderEvents.VIDEO_FINISHED.invoker().invoke();
         }
     }
@@ -380,11 +390,6 @@ public class VideoRenderer {
 
     public void setLoop(boolean loop) {
         this.loop = loop;
-
-        // Audio
-        if (audioPlayer != null) {
-            audioPlayer.setLooping(loop);
-        }
     }
 
     /**

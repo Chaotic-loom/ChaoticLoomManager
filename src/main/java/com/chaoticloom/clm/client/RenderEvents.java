@@ -32,4 +32,18 @@ public class RenderEvents {
     public interface VideoFinishedEvent {
         void invoke();
     }
+
+    public static final Event<SoundEngineLoadedEvent> SOUND_ENGINE_LOADED =
+            EventFactory.createArrayBacked(SoundEngineLoadedEvent.class,
+                    (listeners) -> () -> {
+                        for (SoundEngineLoadedEvent listener : listeners) {
+                            listener.invoke();
+                        }
+                    }
+            );
+
+    @FunctionalInterface
+    public interface SoundEngineLoadedEvent {
+        void invoke();
+    }
 }

@@ -6,3 +6,4 @@ accessible class net/minecraft/client/gui/components/OptionsList$Entry
 accessible field com/mojang/blaze3d/platform/NativeImage pixels J
 accessible field net/minecraft/client/Minecraft pausePartialTick F
 accessible field net/minecraft/client/Minecraft timer Lnet/minecraft/client/Timer;
+accessible field net/minecraft/client/sounds/SoundManager soundEngine Lnet/minecraft/client/sounds/SoundEngine;

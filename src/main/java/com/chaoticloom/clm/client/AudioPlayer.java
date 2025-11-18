@@ -1,486 +1,196 @@
 package com.chaoticloom.clm.client;
 
-import org.bytedeco.javacv.FFmpegFrameGrabber;
-import org.bytedeco.javacv.Frame;
-import org.lwjgl.openal.*;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.openal.AL10;
+import org.lwjgl.stb.STBVorbis;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
-import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
-import java.nio.ShortBuffer;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.LockSupport;
+import java.io.File;
+import java.io.IOException;
+import java.nio.*;
+import java.nio.file.Files;
+import java.util.UUID;
 
-import static com.chaoticloom.clm.ChaoticLoomManager.LOGGER;
-import static org.lwjgl.openal.AL10.*;
-import static org.lwjgl.openal.ALC10.*;
-
-
+/**
+ * Simple AudioPlayer that:
+ *  - Uses ffmpeg to extract audio from an .mp4 to a temporary .ogg
+ *  - Decodes the .ogg via STBVorbis to PCM
+ *  - Uploads PCM to an OpenAL buffer and plays it from a source
+ *
+ * This loads the whole PCM into memory. For long files implement streaming.
+ */
 public class AudioPlayer {
-    private static final int BUFFER_COUNT = 8; // Increased buffer count
-    private static final int SAMPLES_PER_BUFFER = 8192; // Samples per channel per buffer
+    private final int bufferId;
+    private final int sourceId;
+    private final File tempOgg;
+    private float volume = 1.0f;
+    private boolean prepared = false;
 
-    private FFmpegFrameGrabber audioGrabber;
-    private final AtomicBoolean playing = new AtomicBoolean(false);
-    private final AtomicBoolean initialized = new AtomicBoolean(false);
-
-    // OpenAL objects
-    private long device;
-    private long context;
-    private int source;
-    private int[] buffers;
-
-    // Audio properties
-    private int sampleRate;
-    private int channels;
-    private int alFormat;
-
-    // Threading
-    private Thread audioThread;
-
-    // Synchronization
-    private volatile boolean shouldStop = false;
-    private boolean looping = false;
-
+    /**
+     * @param filePath path to an .mp4 (or .ogg) file
+     * @throws RuntimeException on failure (ffmpeg missing, decode error, OpenAL error)
+     */
     public AudioPlayer(String filePath) {
         try {
-            LOGGER.info("Initializing audio player for: {}", filePath);
+            File input = new File(filePath);
+            if (!input.exists()) throw new IllegalArgumentException("file not found: " + filePath);
 
-            // Initialize audio grabber
-            audioGrabber = new FFmpegFrameGrabber(filePath);
-            // Set audio format to signed 16-bit PCM
-            audioGrabber.setSampleFormat(org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16);
-            audioGrabber.start();
-
-            // Get audio properties
-            sampleRate = audioGrabber.getSampleRate();
-            channels = audioGrabber.getAudioChannels();
-
-            if (sampleRate <= 0) {
-                LOGGER.warn("No audio stream found in video");
-                audioGrabber.close();
-                return;
-            }
-
-            LOGGER.info("Audio properties - Sample Rate: {}Hz, Channels: {}, Format: S16", sampleRate, channels);
-
-            // Determine OpenAL format
-            if (channels == 1) {
-                alFormat = AL_FORMAT_MONO16;
-            } else if (channels == 2) {
-                alFormat = AL_FORMAT_STEREO16;
+            // If it's already an OGG file, use it. Otherwise, run ffmpeg to extract audio to a temp .ogg
+            if (filePath.toLowerCase().endsWith(".ogg")) {
+                tempOgg = input;
             } else {
-                throw new IllegalStateException("Unsupported channel count: " + channels);
+                tempOgg = File.createTempFile("clm_audio_" + UUID.randomUUID(), ".ogg");
+                tempOgg.deleteOnExit(); // best-effort
+                runFfmpegExtractAudio(input, tempOgg);
             }
 
-            // Initialize OpenAL
-            initializeOpenAL();
+            // Decode OGG -> raw PCM (ShortBuffer)
+            ByteBuffer oggData = ioReadFileToByteBuffer(tempOgg);
+            IntBuffer channelsBuf = BufferUtils.createIntBuffer(1);
+            IntBuffer sampleRateBuf = BufferUtils.createIntBuffer(1);
 
-            initialized.set(true);
+            ShortBuffer pcm = STBVorbis.stb_vorbis_decode_memory(oggData, channelsBuf, sampleRateBuf);
+            if (pcm == null) throw new RuntimeException("Failed to decode OGG data with STBVorbis.");
+
+            int channels = channelsBuf.get(0);
+            int sampleRate = sampleRateBuf.get(0);
+
+            // Convert ShortBuffer -> ByteBuffer (little-endian) for OpenAL
+            pcm.rewind();
+            ByteBuffer pcmBytes = MemoryUtil.memAlloc(pcm.remaining() * 2);
+            pcmBytes.order(ByteOrder.nativeOrder());
+            while (pcm.hasRemaining()) pcmBytes.putShort(pcm.get());
+            pcmBytes.flip();
+
+            // Create OpenAL buffer & fill it
+            bufferId = AL10.alGenBuffers();
+            int format = (channels == 1) ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16;
+            AL10.alBufferData(bufferId, format, pcmBytes, sampleRate);
+
+            // Create source and attach buffer
+            sourceId = AL10.alGenSources();
+            AL10.alSourcei(sourceId, AL10.AL_BUFFER, bufferId);
+            AL10.alSourcef(sourceId, AL10.AL_GAIN, volume);
+
+            // Free native memory we allocated
+            MemoryUtil.memFree(pcmBytes);
+            // Note: STBVorbis's returned ShortBuffer is allocated by the native lib; free it:
+            MemoryUtil.memFree(pcm);
+
+            // we can free the ByteBuffer holding the ogg file bytes
+            MemoryUtil.memFree(oggData);
+
+            prepared = true;
+        } catch (IOException e) {
+            throw new RuntimeException("IO error preparing audio: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException("ffmpeg process interrupted: " + e.getMessage(), e);
         } catch (Exception e) {
-            LOGGER.error("Failed to initialize audio player", e);
-            cleanup();
+            throw new RuntimeException("Failed to prepare AudioPlayer: " + e.getMessage(), e);
         }
     }
 
-    private void initializeOpenAL() {
-        try {
-            // Open default audio device
-            device = alcOpenDevice((ByteBuffer) null);
-            if (device == 0) {
-                throw new IllegalStateException("Failed to open OpenAL device");
-            }
-
-            // Create context
-            context = alcCreateContext(device, (IntBuffer) null);
-            if (context == 0) {
-                throw new IllegalStateException("Failed to create OpenAL context");
-            }
-
-            alcMakeContextCurrent(context);
-            AL.createCapabilities(ALC.createCapabilities(device));
-
-            // Generate source
-            source = alGenSources();
-            checkALError("Generate source");
-
-            // Configure source
-            alSourcef(source, AL_PITCH, 1.0f);
-            alSourcef(source, AL_GAIN, 1.0f);
-            alSource3f(source, AL_POSITION, 0, 0, 0);
-            alSource3f(source, AL_VELOCITY, 0, 0, 0);
-            alSourcei(source, AL_LOOPING, AL_FALSE);
-
-            // Generate buffers
-            buffers = new int[BUFFER_COUNT];
-            for (int i = 0; i < BUFFER_COUNT; i++) {
-                buffers[i] = alGenBuffers();
-            }
-            checkALError("Generate buffers");
-
-            LOGGER.info("OpenAL initialized successfully");
-        } catch (Exception e) {
-            LOGGER.error("Failed to initialize OpenAL", e);
-            throw new RuntimeException(e);
-        }
-    }
-
+    /**
+     * Play or resume playback.
+     */
     public void play() {
-        if (!initialized.get()) {
-            LOGGER.warn("Audio player not initialized - video may not have audio track");
-            return;
-        }
-
-        if (playing.get() && audioThread != null && audioThread.isAlive()) {
-            return;
-        }
-
-        playing.set(true);
-        shouldStop = false;
-
-        audioThread = new Thread(this::audioLoop, "Audio-Decoder-Thread");
-        audioThread.setDaemon(true);
-        audioThread.start();
-
-        LOGGER.info("Audio playback started");
+        if (!prepared) return;
+        AL10.alSourcePlay(sourceId);
     }
 
+    /**
+     * Pause playback.
+     */
     public void pause() {
-        if (playing.get()) {
-            playing.set(false);
-            if (source != 0) {
-                alSourcePause(source);
-            }
-            joinAudioThread();
-            LOGGER.info("Audio paused");
-        }
+        if (!prepared) return;
+        AL10.alSourcePause(sourceId);
     }
 
+    /**
+     * Stop playback (and rewind).
+     */
     public void stop() {
-        playing.set(false);
-        shouldStop = true;
-
-        if (source != 0) {
-            alSourceStop(source);
-        }
-
-        joinAudioThread();
-
-        try {
-            if (audioGrabber != null) {
-                audioGrabber.setTimestamp(0);
-            }
-        } catch (Exception e) {
-            LOGGER.error("Error resetting audio position", e);
-        }
-
-        LOGGER.info("Audio stopped");
+        if (!prepared) return;
+        AL10.alSourceStop(sourceId);
+        // reset position to start
+        AL10.alSourceRewind(sourceId);
     }
 
-    private void joinAudioThread() {
-        if (audioThread != null && audioThread.isAlive()) {
-            try {
-                audioThread.join(1000);
-                if (audioThread.isAlive()) {
-                    LOGGER.warn("Audio thread did not stop in time, interrupting.");
-                    audioThread.interrupt();
-                }
-            } catch (InterruptedException e) {
-                LOGGER.error("Interrupted while joining audio thread", e);
-                Thread.currentThread().interrupt();
-            }
-            audioThread = null;
-        }
-    }
-
-    private void audioLoop() {
-        LOGGER.debug("Audio decoder thread started");
-
-        try {
-            // Fill initial buffers
-            int bufferedCount = 0;
-            for (int i = 0; i < BUFFER_COUNT; i++) {
-                if (streamBuffer(buffers[i])) {
-                    bufferedCount++;
-                } else {
-                    break;
-                }
-            }
-
-            if (bufferedCount == 0) {
-                LOGGER.error("Failed to buffer any audio data");
-                playing.set(false);
-                return;
-            }
-
-            // Queue all filled buffers to source
-            if (bufferedCount == buffers.length) {
-                // Queue all buffers at once
-                alSourceQueueBuffers(source, buffers);
-            } else {
-                // Queue only the filled buffers
-                int[] filledBuffers = new int[bufferedCount];
-                System.arraycopy(buffers, 0, filledBuffers, 0, bufferedCount);
-                alSourceQueueBuffers(source, filledBuffers);
-            }
-            checkALError("Queue initial buffers");
-
-            // Start playback
-            alSourcePlay(source);
-            checkALError("Start playback");
-
-            LOGGER.debug("Audio playback started with {} buffers", bufferedCount);
-
-            // Streaming loop
-            while (playing.get() && !shouldStop) {
-                // Check how many buffers have been processed
-                int processed = alGetSourcei(source, AL_BUFFERS_PROCESSED);
-
-                // Refill processed buffers
-                while (processed > 0 && playing.get()) {
-                    int buffer = alSourceUnqueueBuffers(source);
-                    checkALError("Unqueue buffer");
-
-                    if (streamBuffer(buffer)) {
-                        alSourceQueueBuffers(source, buffer);
-                        checkALError("Queue buffer");
-                    } else {
-                        // End of stream
-                        if (looping) {
-                            try {
-                                audioGrabber.setTimestamp(0);
-                                if (streamBuffer(buffer)) {
-                                    alSourceQueueBuffers(source, buffer);
-                                }
-                            } catch (Exception e) {
-                                LOGGER.error("Error looping audio", e);
-                                playing.set(false);
-                            }
-                        } else {
-                            // Don't re-queue, let it finish
-                            LOGGER.debug("Audio stream ended");
-                        }
-                    }
-
-                    processed--;
-                }
-
-                // Ensure source is still playing (recover from underrun)
-                int state = alGetSourcei(source, AL_SOURCE_STATE);
-                if (state != AL_PLAYING && playing.get()) {
-                    int queued = alGetSourcei(source, AL_BUFFERS_QUEUED);
-                    if (queued > 0) {
-                        alSourcePlay(source);
-                        LOGGER.debug("Restarted audio playback (buffer underrun recovery)");
-                    } else {
-                        // No more buffers, end of stream
-                        playing.set(false);
-                        LOGGER.debug("Audio playback finished");
-                    }
-                }
-
-                // Sleep briefly to avoid busy waiting
-                LockSupport.parkNanos(10_000_000); // 10ms
-            }
-
-        } catch (Exception e) {
-            LOGGER.error("Exception in audio decoder loop", e);
-        } finally {
-            // Stop source and clear buffers
-            if (source != 0) {
-                alSourceStop(source);
-
-                // Unqueue all remaining buffers
-                int queued = alGetSourcei(source, AL_BUFFERS_QUEUED);
-                if (queued > 0) {
-                    int[] tempBuffers = new int[queued];
-                    for (int i = 0; i < queued; i++) {
-                        tempBuffers[i] = alSourceUnqueueBuffers(source);
-                    }
-                }
-            }
-        }
-
-        LOGGER.debug("Audio decoder thread stopped");
-    }
-
-    private boolean streamBuffer(int buffer) {
-        try {
-            // Calculate total samples needed (per channel)
-            int totalSamplesNeeded = SAMPLES_PER_BUFFER;
-
-            // Allocate buffer for audio data (16-bit samples, so 2 bytes per sample)
-            // Total size = samples * channels * 2 bytes per sample
-            ByteBuffer byteBuffer = MemoryUtil.memAlloc(totalSamplesNeeded * channels * 2);
-            // CRITICAL: Ensure native byte order for OpenAL
-            byteBuffer.order(java.nio.ByteOrder.nativeOrder());
-
-            int samplesWritten = 0;
-            int framesProcessed = 0;
-
-            // Read audio frames until we have enough data
-            while (samplesWritten < totalSamplesNeeded && playing.get()) {
-                // Grab only audio frames
-                Frame audioFrame = audioGrabber.grabFrame(true, false, true, false);
-
-                if (audioFrame == null) {
-                    // End of stream
-                    break;
-                }
-
-                if (audioFrame.samples == null || audioFrame.samples.length == 0) {
-                    continue;
-                }
-
-                // Get audio samples from frame - they're already in S16 format
-                ShortBuffer frameData = (ShortBuffer) audioFrame.samples[0];
-                if (frameData == null || !frameData.hasRemaining()) {
-                    continue;
-                }
-
-                framesProcessed++;
-
-                // CRITICAL: The ShortBuffer position might not be at 0
-                frameData.rewind();
-
-                // The samples are interleaved (L,R,L,R for stereo)
-                // Total values = samples * channels
-                int totalValues = frameData.remaining();
-                int frameSamples = totalValues / channels;
-
-                // Calculate how many samples we can copy
-                int samplesToCopy = Math.min(frameSamples, totalSamplesNeeded - samplesWritten);
-                int valuesToCopy = samplesToCopy * channels;
-
-                // Debug first buffer only
-                if (framesProcessed == 1) {
-                    LOGGER.debug("First audio frame: {} values ({} samples/channel), copying {} values",
-                            totalValues, frameSamples, valuesToCopy);
-                }
-
-                // Copy the samples directly
-                for (int i = 0; i < valuesToCopy && frameData.hasRemaining(); i++) {
-                    short sample = frameData.get();
-                    byteBuffer.putShort(sample);
-                }
-
-                samplesWritten += samplesToCopy;
-            }
-
-            if (samplesWritten == 0) {
-                MemoryUtil.memFree(byteBuffer);
-                return false;
-            }
-
-            // Debug info
-            if (framesProcessed > 0) {
-                LOGGER.debug("Buffered {} samples from {} frames for OpenAL", samplesWritten, framesProcessed);
-            }
-
-            // Prepare buffer for OpenAL
-            byteBuffer.flip();
-
-            // Verify we have data
-            if (byteBuffer.remaining() == 0) {
-                LOGGER.error("ByteBuffer is empty after flip!");
-                MemoryUtil.memFree(byteBuffer);
-                return false;
-            }
-
-            // Upload to OpenAL buffer
-            alBufferData(buffer, alFormat, byteBuffer, sampleRate);
-            checkALError("Buffer data");
-
-            MemoryUtil.memFree(byteBuffer);
-
-            return true;
-
-        } catch (Exception e) {
-            LOGGER.error("Error streaming audio buffer", e);
-            return false;
-        }
-    }
-
-    public void setLooping(boolean loop) {
-        this.looping = loop;
-    }
-
-    public boolean isLooping() {
-        return looping;
-    }
-
-    public boolean isPlaying() {
-        if (!initialized.get() || source == 0) {
-            return false;
-        }
-        return playing.get() && alGetSourcei(source, AL_SOURCE_STATE) == AL_PLAYING;
-    }
-
+    /**
+     * Set source volume (0.0 - 1.0+)
+     */
     public void setVolume(float volume) {
-        if (source != 0) {
-            alSourcef(source, AL_GAIN, Math.max(0.0f, Math.min(1.0f, volume)));
-        }
+        this.volume = volume;
+        if (prepared) AL10.alSourcef(sourceId, AL10.AL_GAIN, volume);
     }
 
     public float getVolume() {
-        if (source != 0) {
-            return alGetSourcef(source, AL_GAIN);
-        }
-        return 0.0f;
+        return volume;
     }
 
-    private void checkALError(String operation) {
-        int error = alGetError();
-        if (error != AL_NO_ERROR) {
-            String errorMsg = switch (error) {
-                case AL_INVALID_NAME -> "Invalid name";
-                case AL_INVALID_ENUM -> "Invalid enum";
-                case AL_INVALID_VALUE -> "Invalid value";
-                case AL_INVALID_OPERATION -> "Invalid operation";
-                case AL_OUT_OF_MEMORY -> "Out of memory";
-                default -> "Unknown error (" + error + ")";
-            };
-            LOGGER.error("OpenAL Error during {}: {}", operation, errorMsg);
-        }
-    }
-
+    /**
+     * Free resources (stops playback, deletes OpenAL objects, removes temp file).
+     */
     public void cleanup() {
-        stop();
-
-        try {
-            if (audioGrabber != null) {
-                audioGrabber.close();
-                audioGrabber = null;
-            }
-
-            if (source != 0) {
-                alDeleteSources(source);
-                source = 0;
-            }
-
-            if (buffers != null) {
-                for (int buffer : buffers) {
-                    if (buffer != 0) {
-                        alDeleteBuffers(buffer);
-                    }
-                }
-                buffers = null;
-            }
-
-            if (context != 0) {
-                alcDestroyContext(context);
-                context = 0;
-            }
-
-            if (device != 0) {
-                alcCloseDevice(device);
-                device = 0;
-            }
-
-            initialized.set(false);
-            LOGGER.info("Audio player cleaned up");
-        } catch (Exception e) {
-            LOGGER.error("Error during audio player cleanup", e);
+        if (prepared) {
+            AL10.alSourceStop(sourceId);
+            AL10.alDeleteSources(sourceId);
+            AL10.alDeleteBuffers(bufferId);
         }
+
+        // remove temp file if we created one
+        try {
+            if (tempOgg != null && tempOgg.exists() && tempOgg.getName().startsWith("clm_audio_")) {
+                tempOgg.delete();
+            }
+        } catch (Exception ignored) {}
+
+        prepared = false;
+    }
+
+    // ----------------- Helpers -----------------
+
+    private static void runFfmpegExtractAudio(File inputMp4, File outOgg) throws IOException, InterruptedException {
+        // Use ffmpeg to extract audio to OGG. Requires ffmpeg installed.
+        // Command: ffmpeg -y -i input.mp4 -vn -acodec libvorbis -ar 44100 -ac 2 out.ogg
+        ProcessBuilder pb = new ProcessBuilder(
+                "ffmpeg",
+                "-y",
+                "-i", inputMp4.getAbsolutePath(),
+                "-vn",
+                "-c:a", "libvorbis",
+                "-ar", "44100",
+                "-ac", "2",
+                outOgg.getAbsolutePath()
+        );
+        pb.redirectErrorStream(true); // combine stdout+stderr
+        Process p = pb.start();
+
+        // read and discard output (prevent blocking)
+        Thread ioDrainer = new Thread(() -> {
+            try (var in = p.getInputStream()) {
+                byte[] buf = new byte[4096];
+                while (in.read(buf) != -1) { /* discard */ }
+            } catch (IOException ignored) {}
+        }, "ffmpeg-io-drainer");
+        ioDrainer.setDaemon(true);
+        ioDrainer.start();
+
+        int exit = p.waitFor();
+        if (exit != 0 || !outOgg.exists()) {
+            throw new IOException("ffmpeg failed to extract audio (exit=" + exit + "). Is ffmpeg installed and accessible?");
+        }
+    }
+
+    /**
+     * Read file bytes into a direct ByteBuffer suitable for stb_vorbis_decode_memory.
+     */
+    private static ByteBuffer ioReadFileToByteBuffer(File file) throws IOException {
+        byte[] bytes = Files.readAllBytes(file.toPath());
+        ByteBuffer bb = MemoryUtil.memAlloc(bytes.length);
+        bb.put(bytes);
+        bb.flip();
+        return bb;
     }
 }
