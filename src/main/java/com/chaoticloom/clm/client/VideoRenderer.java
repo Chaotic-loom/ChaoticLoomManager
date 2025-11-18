@@ -57,8 +57,13 @@ public class VideoRenderer {
     private volatile NativeImage currentDecodeBuffer;
     private final AtomicReference<NativeImage> nextFrameImage = new AtomicReference<>();
 
+    // Audio
+    private AudioPlayer audioPlayer;
+    private String videoFilePath;
+
     public VideoRenderer(String filePath) {
         loadResource(filePath);
+        initializeAudio(filePath);
     }
 
     public VideoRenderer(ResourceLocation resourceLocation) {
@@ -79,7 +84,9 @@ public class VideoRenderer {
                 Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            loadResource(tempFile.toFile().getAbsolutePath());
+            this.videoFilePath = tempFile.toFile().getAbsolutePath();
+            loadResource(videoFilePath);
+            initializeAudio(videoFilePath);
         } catch (Exception e) {
             LOGGER.error("Failed to initialize video player from ResourceLocation: {}", resourceLocation, e);
         }
@@ -135,6 +142,19 @@ public class VideoRenderer {
         }
     }
 
+    /**
+     * Initialize audio player for the video
+     */
+    private void initializeAudio(String filePath) {
+        try {
+            audioPlayer = new AudioPlayer(filePath);
+            LOGGER.info("Audio player initialized for video");
+        } catch (Exception e) {
+            LOGGER.error("Failed to initialize audio player", e);
+            audioPlayer = null;
+        }
+    }
+
     public void play() {
         if (!initialized.get()) {
             LOGGER.error("Texture not initialized! Call initializeTexture() on render thread first.");
@@ -149,6 +169,11 @@ public class VideoRenderer {
         framesDecoded = 0;
         needsCatchUp = false;
 
+        // Audio
+        if (audioPlayer != null) {
+            audioPlayer.play();
+        }
+
         decoderThread = new Thread(this::decoderLoop, "Video-Decoder-Thread");
         decoderThread.setDaemon(true);
         decoderThread.start();
@@ -158,12 +183,25 @@ public class VideoRenderer {
 
     public void pause() {
         playing.set(false);
+
+        // Audio
+        if (audioPlayer != null) {
+            audioPlayer.pause();
+        }
+
         joinDecoderThread();
     }
 
     public void stop() {
         playing.set(false);
+
+        // Audio
+        if (audioPlayer != null) {
+            audioPlayer.stop();
+        }
+
         joinDecoderThread();
+
         try {
             if (grabber != null) {
                 grabber.setVideoTimestamp(0);
@@ -205,7 +243,9 @@ public class VideoRenderer {
                     LockSupport.parkNanos(waitTimeNanos);
                 }
 
-                Frame frame = grabber.grab();
+                //Frame frame = grabber.grab();
+                // Only grab video frames
+                Frame frame = grabber.grabFrame(false, true, true, false);
                 if (frame == null) {
                     handleVideoEnd();
                     continue;
@@ -340,10 +380,42 @@ public class VideoRenderer {
 
     public void setLoop(boolean loop) {
         this.loop = loop;
+
+        // Audio
+        if (audioPlayer != null) {
+            audioPlayer.setLooping(loop);
+        }
+    }
+
+    /**
+     * Set the audio volume (0.0 to 1.0)
+     */
+    public void setVolume(float volume) {
+        if (audioPlayer != null) {
+            audioPlayer.setVolume(volume);
+        }
+    }
+
+    public float getVolume() {
+        if (audioPlayer != null) {
+            return audioPlayer.getVolume();
+        }
+        return 0.0f;
+    }
+
+    public boolean hasAudio() {
+        return audioPlayer != null;
     }
 
     public void close() {
         stop();
+
+        // Audio
+        if (audioPlayer != null) {
+            audioPlayer.cleanup();
+            audioPlayer = null;
+        }
+
         try {
             if (grabber != null) {
                 grabber.close();
