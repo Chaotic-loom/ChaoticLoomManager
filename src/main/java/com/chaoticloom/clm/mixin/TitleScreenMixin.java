@@ -50,7 +50,7 @@ public abstract class TitleScreenMixin extends Screen {
                 Component.translatable("clm.title-screen.join-event"),
                 0,
                 startingYPos, verticalSpacingBetweenButtons,
-                button -> joinServer("127.0.0.1", 25565)
+                button -> joinServer(ChaoticLoomManager.SERVER_IP, ChaoticLoomManager.SERVER_PORT)
         );
 
         Button optionsButton = createButton(
@@ -64,7 +64,7 @@ public abstract class TitleScreenMixin extends Screen {
                 Component.translatable("clm.title-screen.trailer"),
                 2,
                 startingYPos, verticalSpacingBetweenButtons,
-                button -> VideoPlayerController.playVideo(new ResourceLocation(ChaoticLoomManager.MOD_ID, "videos/trailer.mp4"))
+                button -> VideoPlayerController.playVideo(ChaoticLoomManager.TRAILER)
         );
 
         Button quitButton = createButton(
