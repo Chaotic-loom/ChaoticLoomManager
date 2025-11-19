@@ -8,6 +8,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import org.spongepowered.asm.mixin.Mixin;
@@ -51,12 +52,15 @@ public class AbstractButtonMixin {
         Minecraft client = Minecraft.getInstance();
         if (client.screen instanceof TitleScreen) {
             AbstractButton abstractButton = (AbstractButton) (Object) this;
+            Component message = instance.getMessage();
+            int textWidth = font.width(message);
 
-            //guiGraphics.setColor(0F, 0F, 0F, 1.0F);
             int k = abstractButton.active ? 16777215 : 10526880;
 
-            int x = abstractButton.getX() + abstractButton.getWidth() / 2;
-            int y = abstractButton.getX() + abstractButton.getHeight() / 2;
+            int x = instance.getX() + (instance.getWidth() / 2) - (textWidth / 2);
+            int y = instance.getY() + (instance.getHeight() - 8) / 2; // (8 is the standard font height used for vanilla button vertical alignment)
+
+            guiGraphics.setColor(0F, 0F, 0F, 1.0F);
             guiGraphics.drawString(font, abstractButton.getMessage(), x, y, k | Mth.ceil(abstractButton.alpha * 255.0F) << 24, false);
         } else {
             instance.renderString(guiGraphics, font,  i);
