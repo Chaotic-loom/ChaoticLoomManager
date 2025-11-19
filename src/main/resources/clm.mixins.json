@@ -6,6 +6,7 @@
   "mixins": [
   ],
   "client": [
+    "AbstractButtonMixin",
     "DisableInputMixin$Keyboard",
     "DisableInputMixin$Mouse",
     "GameRendererMixin",

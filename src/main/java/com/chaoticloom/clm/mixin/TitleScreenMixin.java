@@ -1,6 +1,7 @@
 package com.chaoticloom.clm.mixin;
 
 import com.chaoticloom.clm.ChaoticLoomManager;
+import com.chaoticloom.clm.client.CustomButtonsHolder;
 import com.chaoticloom.clm.client.VideoPlayerController;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.Font;
@@ -46,28 +47,28 @@ public abstract class TitleScreenMixin extends Screen {
      */
     @Inject(method = "createNormalMenuOptions", at = @At("HEAD"), cancellable = true)
     private void createNormalMenuOptions(int startingYPos, int verticalSpacingBetweenButtons, CallbackInfo ci) {
-        Button serverButton = createButton(
+        CustomButtonsHolder.play = createButton(
                 Component.translatable("clm.title-screen.join-event"),
                 0,
                 startingYPos, verticalSpacingBetweenButtons,
                 button -> joinServer(ChaoticLoomManager.SERVER_IP, ChaoticLoomManager.SERVER_PORT)
         );
 
-        Button optionsButton = createButton(
+        CustomButtonsHolder.options = createButton(
                 Component.translatable("menu.options"),
                 1,
                 startingYPos, verticalSpacingBetweenButtons,
                 button -> this.minecraft.setScreen(new OptionsScreen(this, this.minecraft.options))
         );
 
-        Button trailerButton = createButton(
+        CustomButtonsHolder.trailer = createButton(
                 Component.translatable("clm.title-screen.trailer"),
                 2,
                 startingYPos, verticalSpacingBetweenButtons,
                 button -> VideoPlayerController.playVideo(ChaoticLoomManager.TRAILER)
         );
 
-        Button quitButton = createButton(
+        CustomButtonsHolder.quit = createButton(
                 Component.translatable("menu.quit"),
                 3,
                 startingYPos, verticalSpacingBetweenButtons,
